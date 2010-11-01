@@ -95,7 +95,6 @@ public class DefaultSecurityConfiguration implements SecurityConfiguration {
     public static final String MAX_OLD_PASSWORD_HASHES = "Authenticator.MaxOldPasswordHashes";
 
     public static final String ALLOW_MULTIPLE_ENCODING = "Encoder.AllowMultipleEncoding";
-    public static final String ALLOW_MIXED_ENCODING	= "Encoder.AllowMixedEncoding";
     public static final String CANONICALIZATION_CODECS = "Encoder.DefaultCodecList";
 
     public static final String DISABLE_INTRUSION_DETECTION  = "IntrusionDetector.Disable";
@@ -436,9 +435,6 @@ public class DefaultSecurityConfiguration implements SecurityConfiguration {
 			
 			String validationPropFileName = getESAPIProperty(VALIDATION_PROPERTIES, "validation.properties");
 			Properties validationProperties = null;
-
-			//clear any cached validation patterns so they can be reloaded from validation.properties
-			patternCache.clear();
 			
 			try {
 			    //first attempt file IO loading of properties
@@ -769,13 +765,6 @@ public class DefaultSecurityConfiguration implements SecurityConfiguration {
 	 */
 	public boolean getAllowMultipleEncoding() {
 		return getESAPIProperty( ALLOW_MULTIPLE_ENCODING, false );
-	}
-
-    /**
-	 * {@inheritDoc}
-	 */
-	public boolean getAllowMixedEncoding() {
-		return getESAPIProperty( ALLOW_MIXED_ENCODING, false );
 	}
 
     /**

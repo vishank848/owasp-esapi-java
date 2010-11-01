@@ -338,15 +338,6 @@ public class SecurityConfigurationWrapper implements SecurityConfiguration
 	 * {@inheritDoc}
 	 */
 	// @Override
-	public boolean getAllowMixedEncoding()
-	{
-		return wrapped.getAllowMixedEncoding();
-	}
-
-	/**
-	 * {@inheritDoc}
-	 */
-	// @Override
 	public List getDefaultCanonicalizationCodecs()
 	{
 		return wrapped.getDefaultCanonicalizationCodecs();

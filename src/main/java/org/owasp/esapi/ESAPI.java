@@ -175,10 +175,8 @@ public final class ESAPI {
 	 * ESAPI for this application. 
 	 */
 	public static SecurityConfiguration securityConfiguration() {
-		// copy the volatile into a non-volatile to prevent TOCTTOU race condition
-		SecurityConfiguration override = overrideConfig;
-		if ( override != null ) {
-			return override;
+        if ( overrideConfig != null ) {
+            return overrideConfig;
         }
 
         return ObjFactory.make( securityConfigurationImplName, "SecurityConfiguration" );
