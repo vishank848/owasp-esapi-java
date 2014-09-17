@@ -278,12 +278,12 @@ public final class CipherSpec implements Serializable {
 			throw new IllegalArgumentException("Required IV cannot be null or 0 length.");
 		}
 		
-		// Don't store a reference, but make a copy! When an IV is provided, it should
+		// Don't store a reference, but make a copy! When an IV is provided, it generally should
 		// be the same length as the block size of the cipher.
 		if ( iv != null ) {	// Allow null IV for ECB mode.
 			  // TODO: FIXME: As per email from Jeff Walton to Kevin Wall dated 12/03/2013,
 			  //			  this is not always true. E.g., for CCM, the IV length is supposed
-			  //			  to be 7, 8,  7, 8, 9, 10, 11, 12, or 13 octets because of
+			  //			  to be 7, 8, 9, 10, 11, 12, or 13 octets because of
 			  //			  it's formatting function.
 /***
 			if ( iv.length != this.getBlockSize() && blockSizeExplicitlySet ) {
