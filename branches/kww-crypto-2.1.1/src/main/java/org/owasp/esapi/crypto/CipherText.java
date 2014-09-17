@@ -566,7 +566,7 @@ public final class CipherText implements Serializable {
                 }
   // TODO: FIXME: As per email from Jeff Walton to Kevin Wall dated 12/03/2013,
   //			  this is not always true. E.g., for CCM, the IV length is supposed
-  //			  to be 7, 8,  7, 8, 9, 10, 11, 12, or 13 octets because of
+  //			  to be 7, 8, 9, 10, 11, 12, or 13 octets because of
   //			  it's formatting function.
             } else if ( iv.length != getBlockSize() ) {
                     throw new EncryptionException("Encryption failed -- bad parameters passed to encrypt",  // DISCUSS - also log? See below.
