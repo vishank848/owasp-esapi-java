@@ -135,6 +135,12 @@
 
     <dependencies>
         <dependency>
+    		<groupId>org.bouncycastle</groupId>
+    		<artifactId>bcprov-jdk15</artifactId>
+    		<version>1.44</version>
+ 		</dependency>
+        
+        <dependency>
             <groupId>commons-configuration</groupId>
             <artifactId>commons-configuration</artifactId>
             <version>1.5</version>
