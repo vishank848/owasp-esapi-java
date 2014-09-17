@@ -242,7 +242,8 @@ public class EncryptorTest extends TestCase {
 
     	try {
     		// Generate an appropriate random secret key
-			SecretKey skey = CryptoHelper.generateSecretKey(cipherXform, keySize);	
+			SecretKey skey = CryptoHelper.generateSecretKey(cipherXform, keySize);
+			assertTrue( skey != null );
 			assertTrue( skey.getAlgorithm().equals(cipherXform.split("/")[0]) );
 			String cipherAlg = cipherXform.split("/")[0];
 			
@@ -255,7 +256,13 @@ public class EncryptorTest extends TestCase {
 			} else if ( cipherAlg.equals( "DES" ) ) {
 				keySize = 64;
 			} // Else... use specified keySize.
-			assertTrue( (keySize / 8) == skey.getEncoded().length );
+			int expectedKeySize = keySize / 8;
+			int actualKeySize = skey.getEncoded().length;
+// System.out.println("kww- expected key size: " + expectedKeySize);
+// System.out.println("kww- actual generated key size: " + actualKeySize);
+			assertTrue("Expected key size (" + expectedKeySize + " bytes) != actual key size (" + actualKeySize + ")",
+					   (keySize / 8) == skey.getEncoded().length
+					  );
 //			System.out.println("testNewEncryptDecrypt(): Skey length (bits) = " + 8 * skey.getEncoded().length);
 
 			// Set up properties to use the new specified cipher transformation and
@@ -473,9 +480,9 @@ public class EncryptorTest extends TestCase {
             progressMark++;
         } catch ( Exception e ) {
         	// fail("Failed invalid seal test # " + progressMark + " to verify seal.");
-            System.err.println("Failed seal verification at step # " + progressMark);
-            System.err.println("Exception was: " + e);
-            e.printStackTrace(System.err);
+            System.out.println("Failed seal verification at step # " + progressMark);
+            System.out.println("Exception was: " + e);
+            e.printStackTrace(System.out);
         }
         
         try {
