@@ -34,6 +34,7 @@ public class CipherSpecTest extends TestCase {
 		// myIV = Hex.decode( ESAPI.securityConfiguration().getFixedIV() );
 		myIV = Hex.decode( "0x000102030405060708090a0b0c0d0e0f" );
 
+			// Keep in mind that these completely ignore the preferred JCE provider!
 		dfltAESCipher   = Cipher.getInstance("AES");
 		dfltECBCipher   = Cipher.getInstance("AES/ECB/NoPadding");
 		dfltOtherCipher = Cipher.getInstance("Blowfish/OFB8/PKCS5Padding");
