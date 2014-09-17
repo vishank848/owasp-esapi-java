@@ -67,7 +67,7 @@ public class MoreEncryptorTests extends TestCase {
     	}
     }
     
-    public void testGetInstanceWithPropertyOverride() {
+    public void test2KeyDESWithPropertyOverride() {
     	try {
     		Properties myEnv = new Properties();
     			// Let's try 2-key Triple DES.
@@ -110,6 +110,55 @@ public class MoreEncryptorTests extends TestCase {
     			assertTrue( cause != null && cause instanceof InvalidKeyException );
     		}    		
     		
+    	} catch( Throwable t ) {
+    		t.printStackTrace(System.err);
+    		fail("JavaEncryptor.getInstance() threw exception; exception was: " + t);
+    	}
+    }
+
+    public void testBC256AESWithPropertyOverride() {
+    	try {
+    		Properties myEnv = new Properties();
+    			// Let's try 2-key Triple DES.
+    		myEnv.setProperty(DefaultSecurityConfiguration.CIPHER_TRANSFORMATION_IMPLEMENTATION,
+    				          "AES/CBC/PKCS5Padding");  // Already our default. No worries.
+    		myEnv.setProperty(DefaultSecurityConfiguration.KEY_LENGTH, "256");
+            myEnv.setProperty(DefaultSecurityConfiguration.PREFERRED_JCE_PROVIDER, "BC");
+    		
+    		Encryptor aesEncryptor = JavaEncryptor.getInstance(myEnv);
+    		assertTrue( aesEncryptor != null );
+    		
+    		CipherText ct = null;
+   		
+    		try {
+    			// Since this is using the Encryptor.MasterKey from the
+    			// ESAPI.properties file, which is a 128-bit key for AES, we
+    			// expect this to fail with an EncryptionException whose cause
+    			// was an InvalidKeyException.
+    			ct = aesEncryptor.encrypt(new PlainText("256-bit AES, should fail"));
+    			fail("Excepted EncryptionException with cause of InvalidKeyException");
+    		} catch( EncryptionException ee) {
+    			assertTrue( ee != null);
+    			Throwable cause = ee.getCause();
+    			assertTrue( cause != null && cause instanceof InvalidKeyException );
+    		}
+    		
+    		try {
+    			// Since this is using the Encryptor.MasterKey from the
+    			// ESAPI.properties file, which is a 128-bit key for AES, we
+    			// expect this to fail with an EncryptionException whose cause
+    			// was an InvalidKeyException.
+    			SecretKey aes256key = CryptoHelper.generateSecretKey("AES/CBC/PKCS5Padding", 256);
+    			ct = aesEncryptor.encrypt(aes256key, new PlainText("magic cookie"));
+    			assertTrue( ct != null );
+    			PlainText decryptedPlaintext  = aesEncryptor.decrypt(aes256key, ct);
+    			assertTrue ( decryptedPlaintext != null );
+    			assertTrue( decryptedPlaintext.toString().equals("magic cookie") );
+    		} catch( EncryptionException ee) {
+    			assertTrue( ee != null);
+    			Throwable cause = ee.getCause();
+    			assertTrue( cause != null && cause instanceof InvalidKeyException );
+    		}    		
     	} catch( Throwable t ) {
     		t.printStackTrace(System.err);
     		fail("JavaEncryptor.getInstance() threw exception; exception was: " + t);
