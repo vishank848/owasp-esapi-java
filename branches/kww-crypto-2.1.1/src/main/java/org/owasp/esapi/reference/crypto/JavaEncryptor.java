@@ -38,6 +38,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.Map.Entry;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -103,15 +105,16 @@ public final class JavaEncryptor implements Encryptor {
     // first loaded.
     private static Properties defaultCryptoProps_ = null;
     
-	private String jceProviderProp_ = "SunJCE";	// Property value for Encryptor.PreferredJCEProvider
+	private String jceProviderProp_ = "";		// Property value for Encryptor.PreferredJCEProvider. Do NOT specify
+												// "SunJCE" here as it does not work!
     private Provider jceProvider_ = null;  		// Preferred JCE provider corresponding to jceProviderProp_.
 
     // encryption
-    private SecretKeySpec secretKeySpec_ = null; // Note: Was 'static' pre-2.1.1
+    private transient SecretKeySpec secretKeySpec_ = null; // Note: Was 'static' pre-2.1.1
     private String cipherXform_ = "AES/CBC/PKCS5Padding";
     private String encoding_ = "UTF-8"; 
     private int encryptionKeyLength_ = 128;
-    private byte[] ivBytes_ = null; 	// Not set by CTORs; see setIV().
+    private transient byte[] ivBytes_ = null; 	// Not set by CTORs; see setIV().
     private String useIV_Type_ = null;	// See setIV().
     
     // digital signatures
@@ -135,8 +138,8 @@ public final class JavaEncryptor implements Encryptor {
 	// to protect the integrity of the key store.  All too important to rush
 	// even though the current approach severely restricts its use to what can
 	// be signed and verified with the current running JVM.
-    private static PrivateKey privateKey = null;
-	private static PublicKey publicKey = null;
+    private transient static PrivateKey privateKey = null;
+	private transient static PublicKey publicKey = null;
 	
 	// Logging - DISCUSS: This "sticks" us with a specific logger to whatever it was when
 	//					  this class is first loaded. Is this a big limitation? Since there
@@ -244,6 +247,10 @@ public final class JavaEncryptor implements Encryptor {
 		int eKeyLen = ESAPI.securityConfiguration().getEncryptionKeyLength();
 		String randomAlg = ESAPI.securityConfiguration().getRandomAlgorithm();
 
+			// Since this main() is expected to be run as a stand-alone program from
+			// the command line, the assumption is that here we do not need to worry
+			// about someone inserting an alternate JCE provider ahead our the one (if
+			// any) specified in the ESAPI.properties file.
 		SecureRandom random = SecureRandom.getInstance(randomAlg);
 		SecretKey secretKey = CryptoHelper.generateSecretKey(encryptAlg, eKeyLen);
         byte[] raw = secretKey.getEncoded();
@@ -288,12 +295,18 @@ public final class JavaEncryptor implements Encryptor {
         // For asymmetric encryption (i.e., public/private key)
         //
         try {
-        	SecureRandom prng = SecureRandom.getInstance(randomAlgorithm_);
+        	SecureRandom prng = (SecureRandom)createJCEInstance("java.security.SecureRandom", randomAlgorithm_, jceProvider_);
 
         	// Because hash() is not static (but it could be were in not
         	// for the interface method specification in Encryptor), we
         	// cannot do this initialization in a static method or static
         	// initializer.
+        	//
+        	// Note: Except for shortly after boot-up, I'm still not convinced that there is any
+        	// major advantage to setting seed to the PRNG because we (currently) only generate
+        	// a temporary key pair that we do not persist across JVM instances anyhow. Thus it
+        	// may be better just setting for what the default SecureRandom CTOR gives us. Would be
+        	// good to get a professional cryptographer's opinion on this.
         	byte[] seed = hash(new String(skey, encoding_),new String(salt, encoding_)).getBytes(encoding_);
         	prng.setSeed(seed);
         	synchronized( JavaEncryptor.class ) {
@@ -345,8 +358,9 @@ public final class JavaEncryptor implements Encryptor {
         // For asymmetric encryption (i.e., public/private key)
         //
         try {
-        	SecureRandom prng = SecureRandom.getInstance(randomAlgorithm_);
-
+        	SecureRandom prng = (SecureRandom)createJCEInstance("java.security.SecureRandom", randomAlgorithm_, jceProvider_);
+        	assert prng != null : "Can't create PRNG of type " + randomAlgorithm_;
+        	
         	// Because hash() is not static (but it could be were in not
         	// for the interface method specification in Encryptor), we
         	// cannot do this initialization in a static method or static
@@ -383,8 +397,8 @@ public final class JavaEncryptor implements Encryptor {
 	public String hash(String plaintext, String salt, int iterations) throws EncryptionException {
 		byte[] bytes = null;
 		try {
-			MessageDigest digest = MessageDigest.getInstance(hashAlgorithm_);
-			digest.reset();
+			MessageDigest digest = (MessageDigest)createJCEInstance("java.security.MessageDigest", hashAlgorithm_, jceProvider_);
+			// digest.reset();		// Unneeded as we are creating new instance each time.
 			digest.update(ESAPI.securityConfiguration().getMasterSalt());
 			digest.update(salt.getBytes(encoding_));
 			digest.update(plaintext.getBytes(encoding_));
@@ -408,7 +422,27 @@ public final class JavaEncryptor implements Encryptor {
 	* {@inheritDoc}
 	*/
 	 public CipherText encrypt(PlainText plaintext) throws EncryptionException {
-		 // Now more of a convenience function for using the master key.
+		 // Now more of a convenience function for using the master key. However,
+		 // since we now allow property override to change default key size, we
+		 // need to compare that to the size of the master key (secretKeySpec_).
+		 // If the size of the master key is less than the requested key size, it's
+		 // an error. If it's greater, than we just log a warning.
+		 int masterKeySize = secretKeySpec_.getEncoded().length * 8; // convert to bits
+		 if ( masterKeySize != encryptionKeyLength_ ) {
+			 if ( masterKeySize < encryptionKeyLength_ ) {
+				 InvalidKeyException ike = new InvalidKeyException("Key size mismatch for master key.");
+				 String exMsg = "Master key size (" + masterKeySize +
+				 	") less than requested key size (" + encryptionKeyLength_ + ")";
+				 String logMsg = exMsg + " Reason could be configuration error in ESAPI.properties or" +
+				 				 " overriding DefaultSecurityConfiguration.KEY_LENGTH via" +
+				 				 " JavaEncryptor(Properties) CTOR";
+				 throw new EncryptionException(exMsg, logMsg, ike);
+			 } else {
+				 String logMsg = "Mismatch between master key size (" + masterKeySize + ")" +
+				 				  " and requested key size (" + encryptionKeyLength_ + ").";
+				 logger.warning(Logger.SECURITY_FAILURE, logMsg);
+			 }
+		 }
 		 return encrypt(secretKeySpec_, plaintext);
 	 }
 	 
@@ -454,8 +488,11 @@ public final class JavaEncryptor implements Encryptor {
 			 //        takes a (new class) CryptoControls, as something like this:
 			 //          public CipherText encrypt(CryptoControls ctrl, SecretKey skey, PlainText plaintext)
 			 //        and this method will just call that one.
-			 Cipher encrypter = Cipher.getInstance(xform);
-			 	// Originally, this was an assertion rather than a test because instanceof is (relatively) slow and
+             Cipher encrypter = (jceProvider_ != null ) ?
+            		 				Cipher.getInstance(xform, jceProvider_) :
+            		 				Cipher.getInstance(xform);
+
+            	// Originally, this was an assertion rather than a test because instanceof is (relatively) slow and
 			 	// we generally consider the ESAPI.properties trusted. It probably would be better (more efficient)
                 // to test 'xform', but I'm not sure how the NullCipher is specified in a cipher
 			 	// transformation... maybe NULL/mode/padding???
@@ -569,7 +606,13 @@ public final class JavaEncryptor implements Encryptor {
 			 if ( cipherSpec.requiresIV() ) {
 				 IvParameterSpec ivSpec = null;
 				 if ( useIV_Type_.equalsIgnoreCase("random") ) {
-					 ivBytes = ESAPI.randomizer().getRandomBytes(encrypter.getBlockSize());
+					 	// Previously (prior to ESAPI 2.1.1) we used
+					 	//		ivBytes = ESAPI.randomizer().getRandomBytes(encrypter.getBlockSize());
+					 	// but we really don't want yet another ESAPI component dependency and there
+					 	// is little point for it, plus this is faster.
+			         SecureRandom prng = new SecureRandom();
+			         ivBytes = new byte[ encrypter.getBlockSize() ];
+			         prng.nextBytes(ivBytes);	// The default seeding (from /dev/urandom or Windows equivalent) is OK
 				 } else if ( useIV_Type_.equalsIgnoreCase("fixed") ) {
 					 String fixedIVAsHex = ESAPI.securityConfiguration().getFixedIV();
 					 ivBytes = Hex.decode(fixedIVAsHex);
@@ -618,33 +661,33 @@ public final class JavaEncryptor implements Encryptor {
 			 success = true;	// W00t!!!
 			 return ciphertext;
 		} catch (InvalidKeyException ike) {
-			 throw new EncryptionException("Encryption failure: Invalid key exception.",
-					 "Requested key size: " + keySize + "bits greater than 128 bits. Must install unlimited strength crypto extension from Sun: " +
-					 ike.getMessage(), ike);
-		 } catch (ConfigurationException cex) {
-			 throw new EncryptionException("Encryption failure: Configuration error. Details in log.", "Key size mismatch or unsupported IV method. " +
-					 "Check encryption key size vs. ESAPI.EncryptionKeyLength or Encryptor.ChooseIVMethod property.", cex);
-		 } catch (InvalidAlgorithmParameterException e) {
-			 throw new EncryptionException("Encryption failure (invalid IV)",
-					 "Encryption problem: Invalid IV spec: " + e.getMessage(), e);
-		 } catch (IllegalBlockSizeException e) {
-			 throw new EncryptionException("Encryption failure (no padding used; invalid input size)",
-					 "Encryption problem: Invalid input size without padding (" + xform + "). " + e.getMessage(), e);
-		 } catch (BadPaddingException e) {
-			 throw new EncryptionException("Encryption failure",
-					 "[Note: Should NEVER happen in encryption mode.] Encryption problem: " + e.getMessage(), e);
-		 } catch (NoSuchAlgorithmException e) {
-			 throw new EncryptionException("Encryption failure (unavailable cipher requested)",
-					 "Encryption problem: specified algorithm in cipher xform " + xform + " not available: " + e.getMessage(), e);
-		 } catch (NoSuchPaddingException e) {
-			 throw new EncryptionException("Encryption failure (unavailable padding scheme requested)",
-					 "Encryption problem: specified padding scheme in cipher xform " + xform + " not available: " + e.getMessage(), e);
-		 } finally {
-			 // Don't overwrite anything in the case of exceptions because they may wish to retry.
-			 if ( success && overwritePlaintext ) {
-				 plain.overwrite();		// Note: Same as overwriting 'plaintext' byte array.
+			throw new EncryptionException("Encryption failure: Invalid key exception.",
+					"Requested key size: " + keySize + "bits greater than 128 bits. Must install unlimited strength crypto extension from Sun: " +
+					ike.getMessage(), ike);
+		} catch (ConfigurationException cex) {
+			throw new EncryptionException("Encryption failure: Configuration error. Details in log.", "Key size mismatch or unsupported IV method. " +
+					"Check encryption key size vs. ESAPI.EncryptionKeyLength or Encryptor.ChooseIVMethod property.", cex);
+		} catch (InvalidAlgorithmParameterException e) {
+			throw new EncryptionException("Encryption failure (invalid IV)",
+					"Encryption problem: Invalid IV spec: " + e.getMessage(), e);
+		} catch (IllegalBlockSizeException e) {
+			throw new EncryptionException("Encryption failure (no padding used; invalid input size)",
+					"Encryption problem: Invalid input size without padding (" + xform + "). " + e.getMessage(), e);
+		} catch (BadPaddingException e) {
+			throw new EncryptionException("Encryption failure",
+					"[Note: Should NEVER happen in encryption mode.] Encryption problem: " + e.getMessage(), e);			
+		} catch (NoSuchAlgorithmException e) {
+			throw new EncryptionException("Encryption failure (unavailable cipher requested)",
+					"Encryption problem: specified algorithm in cipher xform " + xform + " not available: " + e.getMessage(), e);
+		} catch (NoSuchPaddingException e) {
+			throw new EncryptionException("Encryption failure (unavailable padding scheme requested)",
+					"Encryption problem: specified padding scheme in cipher xform " + xform + " not available: " + e.getMessage(), e);
+		} finally {
+			// Don't overwrite anything in the case of exceptions because they may wish to retry.
+			if ( success && overwritePlaintext ) {
+				plain.overwrite();		// Note: Same as overwriting 'plaintext' byte array.
+			}
 		}
-	}
 	 }
 
 	/**
@@ -770,7 +813,10 @@ public final class JavaEncryptor implements Encryptor {
     {
         int keySize = 0;
         try {
-            Cipher decrypter = Cipher.getInstance(ciphertext.getCipherTransformation());
+        	String xform = ciphertext.getCipherTransformation();
+            Cipher decrypter = (jceProvider_ != null ) ?
+            						Cipher.getInstance(xform, jceProvider_) :
+            						Cipher.getInstance(xform);
             assert !(decrypter instanceof javax.crypto.NullCipher) : "Cipher is instance of NullCipher: " + ciphertext.getCipherTransformation();
             keySize = key.getEncoded().length * 8;  // Convert to # bits
 
@@ -858,7 +904,9 @@ public final class JavaEncryptor implements Encryptor {
 	*/
 	public String sign(String data) throws EncryptionException {
 		try {
-			Signature signer = Signature.getInstance(signatureAlgorithm_);
+			Signature signer = (jceProvider_ != null ) ?
+									Signature.getInstance(signatureAlgorithm_, jceProvider_) :
+									Signature.getInstance(signatureAlgorithm_);
 			signer.initSign(privateKey);
 			signer.update(data.getBytes(encoding_));
 			byte[] bytes = signer.sign();
@@ -876,7 +924,9 @@ public final class JavaEncryptor implements Encryptor {
 	public boolean verifySignature(String signature, String data) {
 		try {
 			byte[] bytes = ESAPI.encoder().decodeFromBase64(signature);
-			Signature signer = Signature.getInstance(signatureAlgorithm_);
+			Signature signer = (jceProvider_ != null ) ?
+									Signature.getInstance(signatureAlgorithm_, jceProvider_) :
+									Signature.getInstance(signatureAlgorithm_);
 			signer.initVerify(publicKey);
 			signer.update(data.getBytes(encoding_));
 			return signer.verify(bytes);
@@ -908,7 +958,8 @@ public final class JavaEncryptor implements Encryptor {
                 ; // Ignore; should never happen since UTF-8 built into rt.jar
             }
 			// mix in some random data so even identical data and timestamp produces different seals
-			String nonce = ESAPI.randomizer().getRandomString(10, EncoderConstants.CHAR_ALPHANUMERICS);
+            	// TODO - kww - Get rid of undesired Randomizer component.
+            String nonce = ESAPI.randomizer().getRandomString(10, EncoderConstants.CHAR_ALPHANUMERICS);
 			String plaintext = expiration + ":" + nonce + ":" + b64data;
 			// add integrity check; signature is already base64 encoded.
 			String sig = this.sign( plaintext );
@@ -1004,11 +1055,15 @@ public final class JavaEncryptor implements Encryptor {
 /********************
 	public String computeHMAC( String input ) throws EncryptionException {
 		try {
-			Mac hmac = Mac.getInstance("HMacSHA1"); // DISCUSS: Changed to HMacSHA1. MD5 *badly* broken
-												   //          SHA1 should really be avoided, but using
-												   //		   for HMAC-SHA1 is acceptable for now. Plan
-												   //		   to migrate to SHA-256 or NIST replacement for
-												   //		   SHA1 in not too distant future.
+				// DISCUSS: Changed to HMacSHA1. MD5 *badly* broken
+				//          SHA1 should really be avoided, but using
+				//		   for HMAC-SHA1 is acceptable for now. Plan
+				//		   to migrate to SHA-256 or NIST replacement for
+				//		   SHA1 in not too distant future.
+			Mac hmac = (jceProvider_ != null) ?
+							Mac.getInstance("HMacSHA1", jceProvider_) :
+							Mac.getInstance("HMacSHA1");
+
 			// DISCUSS: Also not recommended that the HMac key is the same as the one
 			//			used for encryption (namely, Encryptor.MasterKey). If anything it
 			//			would be better to use Encryptor.MasterSalt for the HMac key, or
@@ -1187,7 +1242,7 @@ public final class JavaEncryptor implements Encryptor {
                 }
 
                 // DISCUSS: Is there any reason to exclude any particular properties here? If so, what
-                //          mechanism.
+                //          mechanism. Maybe Encryptor.MasterKey???  Log this???
                 p.setProperty( key, value );
             }
         }
@@ -1234,17 +1289,32 @@ public final class JavaEncryptor implements Encryptor {
             logger.warning(Logger.SECURITY_FAILURE,
             		"Ignoring digital signature key length default as length is than 512.");
         }
-
-        jceProviderProp_ = p.getProperty( DefaultSecurityConfiguration.PREFERRED_JCE_PROVIDER );
+        useIV_Type_ = ivType;
+        
+    	jceProviderProp_ = p.getProperty( DefaultSecurityConfiguration.PREFERRED_JCE_PROVIDER );
+    	if ( jceProviderProp_ == null || "".equals( jceProviderProp_.trim() ) ) {
+    		return;
+    	}
+    	if ( jceProviderProp_.equalsIgnoreCase("SunJCE") ) {
+    		throw new ConfigurationException("\"SunJCE\" was specified as the value for \"" +
+    				DefaultSecurityConfiguration.PREFERRED_JCE_PROVIDER + "\". Do NOT use that value, as it will *NOT* work. " +
+    				"If you really want to use SunJCE, leave this property empty and properly configure your java.security file. " +
+    				"For further details, see 'IMPORTANT NOTE for ESAPI 2.1.1 and later' in ESAPI.properties associated " +
+    				"with this property name.");
+    	}
         try {
+        		// This method returns null if the arg is null or the empty string. We treat
+        		// a null jceProvider_ as just to use the default JCE provider, whatever it
+        		// happens to be (usually SunJCE, but YMMV).
         	jceProvider_ = SecurityProviderLoader.getProviderInstanceFor(jceProviderProp_);
+        	if ( jceProvider_ != null ) {
+        	logger.info(Logger.SECURITY_AUDIT, "Preferred JCE provider of " + jceProviderProp_ +
+        									   " set to Provider class " + jceProvider_.getName() );
+        	}
         } catch( NoSuchProviderException e ) {
         	throw new ConfigurationException("Failed to set requested JCE Provider for '" +
-        			                         jceProvider_ + "'. Try using fully qualified classname of provider.", e);
+        			                         jceProviderProp_ + "'. Try using fully qualified classname of JCE provider.", e);
         }
-
-        // ivBytes_ = null;
-        useIV_Type_ = ivType;
         return;
     }
     
@@ -1332,7 +1402,8 @@ public final class JavaEncryptor implements Encryptor {
             // Ditto for RSA.
             sigAlg = "RSA";
         }
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(sigAlg);
+
+        KeyPairGenerator keyGen = (KeyPairGenerator)createJCEInstance("java.security.KeyPairGenerator", sigAlg, jceProvider_);
         keyGen.initialize(signatureKeyLength_, prng);
         KeyPair pair = keyGen.generateKeyPair();
         privateKey = pair.getPrivate();
@@ -1382,4 +1453,70 @@ public final class JavaEncryptor implements Encryptor {
         String cipherAlg = parts[0];
         return cipherAlg;
     }
+    
+    // This is similar to ObjFactory.make(), but here we call the getInstance() method
+    // as either getInstance(Provider, String) or getInstance(String). Also, we are calling
+    // it under much more controlled circumstances so don't do any error checking.
+	@SuppressWarnings("unchecked")
+	private static <T> T makeObj(String className, String algName, Provider provider) throws NoSuchAlgorithmException
+    {
+		Object obj = null;
+        Method method = null;
+        Throwable t = null;
+
+        try {
+        	Class<?> theClass = Class.forName(className);
+
+        	if ( provider != null ) {
+        		method = theClass.getMethod( "getInstance", new Class<?>[] { String.class, Provider.class }  );
+        		obj = method.invoke( null, new Object[] { algName, provider } );
+        	} else {
+        		method = theClass.getMethod( "getInstance", new Class<?>[] { String.class }  );
+        		obj = method.invoke( null, new Object[] { algName } );
+        	}
+        } catch(Exception ex) {
+        	t = ex;
+        }
+        if ( t != null ) {
+        	String errMsg = "Can't create instance of " + className + " from " +
+					( (provider == null) ? "default JCE " : provider.getName() ) + " provider for algorithm " +
+					algName;
+        	throw new NoSuchAlgorithmException(errMsg, t);
+        }
+
+        return (T)obj;
+    }
+
+	// We want to ensure we try the _preferred_ JCE provider first, but this is not as
+	// simple as might first appear for some of the other JCE classes (such as Cipher)
+	// because there are some JCE providers whom, for whatever
+    // reason, have decided not to provide an implementation for certain classes. One
+	// example is Bouncy Castle, who for whatever reason does not provide an implementation
+	// for SHA1PRNG for SecureRandom. There are also other issues, such as the Sun / Oracle not
+	// providing implementations for (say) SHA-512 as part of SunJCE. (Instead, that is under
+	// SunMSCAPI on Windows for instance.)
+	//
+	// Therefore, we try the _preferred_ JCE provider first and only try the default when that one
+	// doesn't work. (For things like Cipher, we are not this liberal and an error is returned
+	// if we can't find one under the preferred provider. The advantage of doing this is that
+	// we do not get initialization failures when first loading this class if something should
+	// go wrong. Those cases lead to obtuse exceptions that are generally very difficult to figure
+	// out what went wrong.
+	private static <T> T createJCEInstance(String className, String algName, Provider prefProvider) throws NoSuchAlgorithmException {
+        if ( prefProvider == null ) {
+            return makeObj( className, algName, null );
+        } else {
+        	T jceObj = null;
+        	try {
+        		jceObj = makeObj( className, algName, prefProvider );
+        	} catch( NoSuchAlgorithmException ex) {
+        		logger.warning(Logger.SECURITY_FAILURE, "JCE provider " + prefProvider +
+        				" does not support algorithm " + algName + " for " + className + "." +
+        				" Using default provider instead.", ex);
+                jceObj = makeObj( className, algName, null );	// Use default / alternate providers.
+        	}
+    		assert jceObj != null;
+            return jceObj;
+        }	
+	}
 }
