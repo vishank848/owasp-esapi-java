@@ -61,6 +61,8 @@ public class CryptoPolicy {
             byte[] raw = skey.getEncoded();
             SecretKeySpec skeySpec = new SecretKeySpec(raw, "AES");
             Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding");
+            System.out.println("checkCrypto(): Using provider " + cipher.getProvider().getName() +
+            				   " for Cipher instance.");
             
                 // This usually will throw InvalidKeyException unless the
                 // unlimited jurisdiction policy files are installed. However,
