@@ -54,6 +54,7 @@ public class CipherTextTest {
     
 	@Before
 	public void setUp() throws Exception {
+			// Ignores the preferred JCE provider for ESAPI.
         encryptor = Cipher.getInstance("AES/CBC/PKCS5Padding");
         decryptor = Cipher.getInstance("AES/CBC/PKCS5Padding");
         byte[] ivBytes = null;
